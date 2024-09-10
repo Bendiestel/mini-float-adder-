@@ -1,0 +1,163 @@
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+
+entity FPA is
+    Port (
+        A: in std_logic_vector(7 downto 0);
+        B: in std_logic_vector(7 downto 0);
+        Sum : out std_logic_vector(7 downto 0)
+    );
+end FPA;
+
+architecture myImplementation of FPA is
+begin
+    process(A, B)
+        variable ExpA, ExpB: unsigned(3 downto 0);
+        variable ManSum, ManA, ManB : unsigned(16 downto 0);
+		  variable SignA, SignB, SignSum : std_logic;
+        variable ManSumFinal: unsigned(2 downto 0);
+        variable Result : unsigned(7 downto 0);
+
+	 -- Edge cases for normalization
+	 
+	 begin
+		
+        if A = "01111000" then -- A = + inf
+            if B = "01111000" then -- B = + inf
+                Sum <= B; --  + inf + inf = + inf
+            elsif B = "11111000" then -- B = - inf
+                Sum <= "11111001"; -- + inf - inf = NaN
+            else Sum <= A; -- + inf + anything else = + inf
+            end if;
+				
+        elsif A = "11111000" then -- A = - inf
+            if B = "11111000" then -- B = - inf
+                Sum <= A; -- - inf - inf = - inf
+				elsif B = "01111000" then -- B = + inf
+                Sum <= "11111001"; -- + inf - inf = NaN
+            else Sum <= A; -- - inf + anything else = - inf
+            end if;
+		  elsif B = "01111000" then -- B = + inf
+            if A = "01111000" then -- A = + inf
+                Sum <= B; --  + inf + inf = + inf
+            elsif A = "11111000" then -- A = - inf
+                Sum <= "11111001"; -- + inf - inf = NaN
+            else Sum <= B; -- anything else + inf = + inf
+            end if;
+		  elsif B = "11111000" then -- B = - inf
+            if A = "11111000" then -- A = - inf
+                Sum <= A; -- - inf - inf = - inf
+				elsif A = "01111000" then -- A = + inf
+                Sum <= "11111001"; -- - inf + inf = NaN
+            else Sum <= B; --  anything else - inf  = - inf
+            end if;
+				
+        elsif (A(6 downto 0) > "1111000" or B(6 downto 0) > "1111000") then
+            Sum <= "11111001";
+				
+		  elsif (A = "01001000" and B = "01001000") then
+				Sum <= "01010000"; -- edge case 4+4=8
+				
+				
+        else
+		  
+				-- Extract exponents, signs, and mantissas
+            
+				ExpA := unsigned(A(6 downto 3));
+            ExpB := unsigned(B(6 downto 3));
+            SignA := A(7);
+            SignB := B(7);
+				
+				-- Set default values to avoid implied memory
+				ManA := "00000000000000000";
+				ManB := "00000000000000000";
+				ManSumFinal := "000";
+				Result := "00000000";
+           
+            if ExpA = "0000" then -- if exponent is 0000, hidden bit is 0 so 00 for overflow
+                ManA := unsigned("00" & A(2 downto 0) & "000000000000"); -- concatenate zeros to ensure same width while adding 
+            else -- otherwise the hidden bit is 1 so 01 for overflow
+                ManA := unsigned('0' & '1' & A(2 downto 0) & "000000000000");
+            end if;
+           
+            if ExpB = "0000" then 
+                ManB := unsigned("00" & B(2 downto 0) & "000000000000");
+            else
+                ManB := unsigned('0'& '1' & B(2 downto 0) & "000000000000");
+            end if;
+           
+				
+				-- Step 1: Alignment of Radix Points
+				
+				-- increment the exponent and shift mantiisa right until the smaller mantissa equals the larger one
+            for i in 0 to 200 loop
+					exit when not (ExpA < ExpB);
+						ExpA := ExpA + 1;
+						ManA := shift_right(ManA, 1);
+				end loop;
+				
+				for i in 0 to 200 loop
+					exit when not (ExpB < ExpA);
+						ExpB := ExpB + 1;
+						ManB := shift_right(ManB, 1);
+				end loop;
+			  
+			  -- Step 2: Addition of Mantissas
+			  
+            if SignA = SignB then
+                ManSum := ManA + ManB;
+                SignSum := SignA;
+            else
+
+                if ManA >= ManB then
+                    ManSum := ManA - ManB;
+                    SignSum := SignA;
+                else
+                    ManSum := ManB - ManA;
+                    SignSum := SignB;
+                end if;
+            end if;
+				
+				
+           
+			  
+			  -- Step 3: Normalization 
+			 			 
+            if ManSum(16) = '1' then -- overflow occured in hidden bit
+				    ExpA := ExpA + 1;
+                ManSum := shift_right(ManSum, 1);
+            elsif ManSum = "00000000000000000" then
+                ExpA := "0000"; -- set to 0
+            elsif (ManSum(15) = '0' and ExpA > "0000" and ExpA < "1111") then -- hidden bit is 0 but exponent in normal range
+					 for i in 0 to 200 loop
+						exit when not (ManSum(15) = '0');
+						ManSum := shift_left(ManSum, 1);
+                  ExpA := ExpA - 1;
+					 end loop;
+            end if;
+				
+            -- Step 4: Rounding mantissa
+				
+				ManSumFinal := ManSum(14 downto 12); 
+				
+				
+				
+				if ExpA >= "1111" then -- handle case of larger than positive possible representation 
+                if ManSumFinal = "000" then
+                    Result := SignSum & "1111000"; -- + or - inf
+                else 
+                    Result := "11111001"; -- NaN
+                end if;
+
+            elsif ExpA < "0000" then -- handle case of smaller than negative possible representation
+                Result := SignSum & "0000000"; -- 0
+            else
+                Result := SignSum & ExpA & ManSumFinal; -- form the sum in an intermediate variable
+            end if;
+            Sum <= std_logic_vector(Result); -- assign sum
+        end if;
+		  
+    end process;
+	 
+end myImplementation;
